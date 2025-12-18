@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dodo_postgres
+    environment:
+      POSTGRES_USER: dodo
+      POSTGRES_PASSWORD: dodo_password
+      POSTGRES_DB: dodo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dodo -d dodo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: rust:1.82
+    container_name: dodo_app
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo_cache:/usr/local/cargo/registry
+      - target_cache:/app/target
+    command: >
+      sh -c "cargo run"
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://dodo:dodo_password@postgres:5432/dodo
+      RUST_LOG: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  cargo_cache:
+  target_cache:
