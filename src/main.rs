@@ -1,12 +1,27 @@
+use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
+use std::time::Duration;
 
-use dodointerview::create_router;
+use dodointerview::{create_router, AppState};
 
 #[tokio::main]
 async fn main() {
-    let app = create_router();
+    dotenvy::dotenv().ok();
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(Duration::from_secs(3))
+        .connect(&db_url)
+        .await
+        .expect("Failed to connect to database");
+
+    let state = AppState { pool };
+
+    let app = create_router(state.clone()).with_state(state);
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     println!("Server running at http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

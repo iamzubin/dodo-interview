@@ -1,43 +1,29 @@
 use axum::{
-    extract::Request,
-    middleware::{self, Next},
-    response::Response,
+    middleware::{self},
     routing::{get, post},
     Router,
 };
-use crate::handlers::{auth, user};
+use crate::handlers::{auth, health, accounts};
+use crate::state::AppState; 
+use crate::middlewares::auth::auth_middleware;
 
-pub fn create_router() -> Router {
+pub fn create_router(state: AppState) -> Router<AppState> {
 
     // Auth routes
     let auth_routes = Router::new()
-        .route("/login", post(auth::login))
-        .route("/signup", post(auth::signup))
-        .route("/logout", post(auth::logout));
+        .route("/generate-api-key", post(auth::generate_api_key))
+        .route("/signup", post(auth::signup));
 
-    // User routes
-    let user_routes = Router::new()
-        .route("/", post(user::create_user).get(user::list_users))
-        .route(
-            "/{id}",
-            get(user::get_user)
-                .put(user::update_user)
-                .delete(user::delete_user),
-        )
-        .layer(middleware::from_fn(auth_middleware));
+    // Accounts routes
+    let accounts_routes = Router::new()
+        .route("/create", post(accounts::create_account))
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
+
+
 
     Router::new()
-        .route("/", get(health_check))
-        .nest("/users", user_routes)
+        .route("/", get(health::health_check))
+        .nest("/accounts", accounts_routes)
         .nest("/auth", auth_routes)
 }
 
-async fn auth_middleware(request: Request, next: Next) -> Response {
-    // Placeholder for authentication logic
-    println!("Auth middleware triggered for: {}", request.uri());
-    next.run(request).await
-}
-
-async fn health_check() -> &'static str {
-    "Server is running!"
-}

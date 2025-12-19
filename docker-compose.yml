@@ -17,7 +17,7 @@ services:
       retries: 5
 
   app:
-    image: rust:1.82
+    image: rust:latest
     container_name: dodo_app
     working_dir: /app
     volumes:
