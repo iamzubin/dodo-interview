@@ -1,29 +1,42 @@
+use crate::handlers::{accounts, auth, health};
+use crate::middlewares::auth::auth_middleware;
+use crate::state::AppState;
 use axum::{
     middleware::{self},
     routing::{get, post},
     Router,
 };
-use crate::handlers::{auth, health, accounts};
-use crate::state::AppState; 
-use crate::middlewares::auth::auth_middleware;
+use tower_http::cors::{Any, CorsLayer};
 
 pub fn create_router(state: AppState) -> Router<AppState> {
-
     // Auth routes
     let auth_routes = Router::new()
         .route("/generate-api-key", post(auth::generate_api_key))
         .route("/signup", post(auth::signup));
 
-    // Accounts routes
-    let accounts_routes = Router::new()
+    // Protected accounts routes
+    let protected_accounts_routes = Router::new()
         .route("/create", post(accounts::create_account))
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
+        .route("/transfer", post(accounts::transfer))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
 
-
+    // Public accounts routes
+    let public_accounts_routes = Router::new().route("/", get(accounts::get_accounts));
 
     Router::new()
         .route("/", get(health::health_check))
-        .nest("/accounts", accounts_routes)
+        .nest(
+            "/accounts",
+            public_accounts_routes.merge(protected_accounts_routes),
+        )
         .nest("/auth", auth_routes)
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
 }
-

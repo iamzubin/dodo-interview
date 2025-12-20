@@ -1,5 +1,9 @@
 use crate::state::AppState;
-use axum::{extract::{Request, State}, middleware::Next, response::Response};
+use axum::{
+    extract::{Request, State},
+    middleware::Next,
+    response::Response,
+};
 use hex;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -14,36 +18,39 @@ pub async fn auth_middleware(
         .get("Authorization")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
+
     if api_key.is_empty() {
         return Response::builder()
             .status(401)
             .body("Unauthorized".into())
-            .unwrap();
+            .unwrap_or_default();
     }
-    // Hash the API key (same way as when it was created)
+
     let mut hasher = Sha256::new();
     hasher.update(api_key.as_bytes());
     let key_hash = hex::encode(hasher.finalize());
-    let row: Option<sqlx::postgres::PgRow> = match sqlx::query("SELECT business_id FROM api_keys WHERE key_hash = $1")
+
+    let row = match sqlx::query("SELECT business_id FROM api_keys WHERE key_hash = $1")
         .bind(&key_hash)
         .fetch_optional(&state.pool)
         .await
     {
-        Ok(row) => row,
-        Err(_) => {
+        Ok(Some(row)) => row,
+        Ok(None) => {
             return Response::builder()
                 .status(401)
                 .body("Unauthorized".into())
-                .unwrap();
+                .unwrap_or_default();
+        }
+        Err(_) => {
+            return Response::builder()
+                .status(500)
+                .body("Internal Server Error".into())
+                .unwrap_or_default();
         }
     };
-    if row.is_none() {
-        return Response::builder()
-            .status(401)
-            .body("Unauthorized".into())
-            .unwrap();
-    }
-    let business_id: sqlx::types::Uuid = row.unwrap().get("business_id");
+
+    let business_id: sqlx::types::Uuid = row.get("business_id");
     request.extensions_mut().insert(business_id);
     next.run(request).await
 }
