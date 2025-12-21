@@ -30,10 +30,12 @@ pub async fn auth_middleware(
     hasher.update(api_key.as_bytes());
     let key_hash = hex::encode(hasher.finalize());
 
-    let row = match sqlx::query("SELECT business_id FROM api_keys WHERE key_hash = $1")
-        .bind(&key_hash)
-        .fetch_optional(&state.pool)
-        .await
+    let row = match sqlx::query(
+        "SELECT business_id FROM api_keys WHERE key_hash = $1 AND is_active = true",
+    )
+    .bind(&key_hash)
+    .fetch_optional(&state.pool)
+    .await
     {
         Ok(Some(row)) => row,
         Ok(None) => {

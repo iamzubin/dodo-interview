@@ -1,6 +1,7 @@
-use crate::models::{IdempotencyStatus, TransferRequest, TransferResponse};
+use crate::models::{CreditDebitRequest, IdempotencyStatus, TransferRequest};
 use crate::state::AppState;
 use axum::Json;
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 use sqlx::{types::Uuid, Row};
 
@@ -18,13 +19,16 @@ pub fn validate_transfer_input(payload: &TransferRequest) -> Result<(Uuid, Uuid)
     Ok((from_account_id, to_account_id))
 }
 
-pub async fn check_idempotency_cache(
+pub async fn check_idempotency_cache<T>(
     state: &AppState,
     business_id: Uuid,
     idempotency_key: &str,
-) -> Result<Option<TransferResponse>, Json<Value>> {
+) -> Result<Option<T>, Json<Value>>
+where
+    T: DeserializeOwned + Clone,
+{
     let cached = sqlx::query(
-        "SELECT response_body, status_code FROM idempotency_keys WHERE business_id = $1 AND key = $2"
+        "SELECT response_body, status FROM idempotency_keys WHERE business_id = $1 AND key = $2",
     )
     .bind(business_id)
     .bind(idempotency_key)
@@ -36,9 +40,7 @@ pub async fn check_idempotency_cache(
 
         if status == IdempotencyStatus::Success {
             if let Ok(response_body) = row.try_get::<serde_json::Value, _>("response_body") {
-                if let Ok(cached_response) =
-                    serde_json::from_value::<TransferResponse>(response_body)
-                {
+                if let Ok(cached_response) = serde_json::from_value::<T>(response_body) {
                     return Ok(Some(cached_response));
                 }
             }
@@ -230,11 +232,11 @@ pub async fn create_transaction_record(
     Ok(transaction_id)
 }
 
-pub async fn store_idempotency_key(
+pub async fn store_idempotency_key<T: Serialize>(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     business_id: Uuid,
     idempotency_key: &str,
-    response: &TransferResponse,
+    response: &T,
 ) -> Result<(), Json<Value>> {
     let response_json = serde_json::to_value(response)
         .map_err(|_| Json(json!({ "error": "Failed to serialize response" })))?;
@@ -274,10 +276,11 @@ pub async fn fail_idempotency_key(
     Ok(())
 }
 
-pub async fn create_webhook_event(
+pub async fn create_webhook_event<T: Serialize>(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     business_id: Uuid,
-    payload: &TransferResponse,
+    event_type: &str,
+    payload: &T,
 ) -> Result<(), Json<Value>> {
     let payload_json = serde_json::to_value(payload)
         .map_err(|_| Json(json!({ "error": "Failed to serialize webhook payload" })))?;
@@ -294,9 +297,10 @@ pub async fn create_webhook_event(
         let endpoint_id: Uuid = endpoint.get("id");
         sqlx::query(
             "INSERT INTO webhook_events (webhook_endpoint_id, event_type, payload) 
-             VALUES ($1, 'transfer.created', $2)",
+             VALUES ($1, $2, $3)",
         )
         .bind(endpoint_id)
+        .bind(event_type)
         .bind(&payload_json)
         .execute(&mut **tx)
         .await
@@ -304,4 +308,105 @@ pub async fn create_webhook_event(
     }
 
     Ok(())
+}
+
+// Credit/Debit service functions
+
+pub fn validate_cd_input(payload: &CreditDebitRequest) -> Result<Uuid, Json<Value>> {
+    if payload.amount <= 0 {
+        return Err(Json(json!({ "error": "Amount must be positive" })));
+    }
+
+    if payload.transaction_type != "credit" && payload.transaction_type != "debit" {
+        return Err(Json(
+            json!({ "error": "Invalid transaction_type. Must be 'credit' or 'debit'" }),
+        ));
+    }
+
+    Uuid::parse_str(&payload.account_id)
+        .map_err(|_| Json(json!({ "error": "Invalid account_id format" })))
+}
+
+pub async fn fetch_account(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account_id: Uuid,
+    business_id: Uuid,
+) -> Result<(String, i64), Json<Value>> {
+    let account = sqlx::query(
+        "SELECT id, business_id, balance, currency FROM accounts WHERE id = $1 AND business_id = $2 FOR UPDATE",
+    )
+    .bind(account_id)
+    .bind(business_id)
+    .fetch_optional(&mut **tx)
+    .await;
+
+    match account {
+        Ok(Some(row)) => {
+            let currency: String = row.get("currency");
+            let balance: i64 = row.get("balance");
+            Ok((currency, balance))
+        }
+        Ok(None) => Err(Json(
+            json!({ "error": "Account not found or does not belong to this business" }),
+        )),
+        Err(_) => Err(Json(json!({ "error": "Failed to fetch account" }))),
+    }
+}
+
+pub async fn update_balance(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account_id: Uuid,
+    amount: i64,
+    is_credit: bool,
+) -> Result<i64, Json<Value>> {
+    let operator = if is_credit { "+" } else { "-" };
+    let query = format!(
+        "UPDATE accounts SET balance = balance {} $1 WHERE id = $2 RETURNING balance",
+        operator
+    );
+
+    let result = sqlx::query(&query)
+        .bind(amount)
+        .bind(account_id)
+        .fetch_one(&mut **tx)
+        .await;
+
+    match result {
+        Ok(row) => Ok(row.get("balance")),
+        Err(_) => Err(Json(json!({ "error": "Failed to update balance" }))),
+    }
+}
+
+pub async fn create_cd_record(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    business_id: Uuid,
+    account_id: Uuid,
+    amount: i64,
+    transaction_type: &str,
+    idempotency_key: &str,
+) -> Result<Uuid, Json<Value>> {
+    // For credit: to_account_id = account_id, from_account_id = NULL
+    // For debit: from_account_id = account_id, to_account_id = NULL
+    let (from_id, to_id): (Option<Uuid>, Option<Uuid>) = if transaction_type == "credit" {
+        (None, Some(account_id))
+    } else {
+        (Some(account_id), None)
+    };
+
+    let result = sqlx::query(
+        "INSERT INTO transactions (business_id, from_account_id, to_account_id, amount, type, status, idempotency_key) 
+         VALUES ($1, $2, $3, $4, $5, 'success', $6) RETURNING id",
+    )
+    .bind(business_id)
+    .bind(from_id)
+    .bind(to_id)
+    .bind(amount)
+    .bind(transaction_type)
+    .bind(idempotency_key)
+    .fetch_one(&mut **tx)
+    .await;
+
+    result
+        .map(|row| row.get::<Uuid, _>("id"))
+        .map_err(|_| Json(json!({ "error": "Failed to create transaction record" })))
 }

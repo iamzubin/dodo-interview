@@ -5,26 +5,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{types::Uuid, Row};
 use std::time::Duration;
-// ... imports ...
-
-// ... structs ...
-
-// ... existing functions ...
 
 pub async fn process_webhooks(state: AppState) {
     let client = reqwest::Client::new();
 
     loop {
-        // Fetch pending events
-        // Note: we cast strings to webhook_event_status in the query if needed, or sqlx handles it if we bind properly.
-        // But here we are hardcoding 'pending' in the WHERE clause.
-        // PostgreSQL enums are strict. 'pending' string literal usually works if context is clear or casted.
-        // Safest is to explicitly cast: 'pending'::webhook_event_status
+        // Fetch pending events that are due for processing (first attempt or retries after backoff)
         let events = sqlx::query(
             "SELECT we.id, we.event_type, we.payload, we.attempts, ep.url, ep.secret 
              FROM webhook_events we
              JOIN webhook_endpoints ep ON we.webhook_endpoint_id = ep.id
-             WHERE we.status = 'pending'::webhook_event_status AND ep.is_active = true
+             WHERE we.status = 'pending'::webhook_event_status 
+             AND ep.is_active = true
+             AND (we.last_attempt_at IS NULL OR we.last_attempt_at < NOW() - INTERVAL '10 seconds' * (we.attempts + 1))
              LIMIT 10
              FOR UPDATE OF we SKIP LOCKED",
         )
@@ -43,6 +36,11 @@ pub async fn process_webhooks(state: AppState) {
                     let url: String = row.get("url");
                     let payload: Value = row.get("payload");
                     let secret: String = row.get("secret");
+                    let attempts: i32 = row.get("attempts");
+
+                    // TODO: For better security, sign the payload using HMAC-SHA256 with the secret
+                    // and send the signature in a header (e.g., X-Webhook-Signature).
+                    // Sending the raw secret is essentially a shared password.
 
                     let result = client
                         .post(&url)
@@ -51,18 +49,31 @@ pub async fn process_webhooks(state: AppState) {
                         .send()
                         .await;
 
-                    let (status, _error) = match result {
+                    let (new_status, _error) = match result {
                         Ok(res) => {
                             if res.status().is_success() {
                                 (WebhookEventStatus::Delivered, None)
                             } else {
-                                (
-                                    WebhookEventStatus::Failed,
-                                    Some(format!("HTTP {}", res.status())),
-                                )
+                                if attempts >= 5 {
+                                    (
+                                        WebhookEventStatus::Failed,
+                                        Some(format!("HTTP {}", res.status())),
+                                    )
+                                } else {
+                                    (
+                                        WebhookEventStatus::Pending,
+                                        Some(format!("HTTP {} (will retry)", res.status())),
+                                    )
+                                }
                             }
                         }
-                        Err(e) => (WebhookEventStatus::Failed, Some(e.to_string())),
+                        Err(e) => {
+                            if attempts >= 5 {
+                                (WebhookEventStatus::Failed, Some(e.to_string()))
+                            } else {
+                                (WebhookEventStatus::Pending, Some(e.to_string()))
+                            }
+                        }
                     };
 
                     let _ = sqlx::query(
@@ -70,7 +81,7 @@ pub async fn process_webhooks(state: AppState) {
                          SET status = $1, last_attempt_at = NOW(), attempts = attempts + 1 
                          WHERE id = $2",
                     )
-                    .bind(status)
+                    .bind(new_status)
                     .bind(event_id)
                     .execute(&state.pool)
                     .await;

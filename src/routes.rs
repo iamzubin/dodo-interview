@@ -18,6 +18,7 @@ pub fn create_router(state: AppState) -> Router<AppState> {
     let protected_accounts_routes = Router::new()
         .route("/create", post(accounts::create_account))
         .route("/transfer", post(accounts::transfer))
+        .route("/credit-debit", post(accounts::credit_debit))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

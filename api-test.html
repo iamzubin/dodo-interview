@@ -325,6 +325,40 @@
             <button onclick="transferFunds()">Execute Transfer</button>
             <div id="transferResponse" class="response" style="display: none;"></div>
         </div>
+
+        <!-- Credit/Debit -->
+        <div class="api-section">
+            <h2>
+                <span class="method-badge method-post">POST</span>
+                Credit/Debit Funds
+            </h2>
+            <p style="margin-bottom: 15px; color: #666;">Add (credit) or withdraw (debit) funds from an account.</p>
+            <div class="form-group">
+                <label for="cdAccountId">Account ID:</label>
+                <input type="text" id="cdAccountId" placeholder="UUID">
+            </div>
+            <div class="form-group">
+                <label for="cdAmount">Amount:</label>
+                <input type="number" id="cdAmount" placeholder="100">
+            </div>
+            <div class="form-group">
+                <label for="cdType">Transaction Type:</label>
+                <select id="cdType"
+                    style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;">
+                    <option value="credit">Credit (Add Funds)</option>
+                    <option value="debit">Debit (Withdraw Funds)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="cdIdempotencyKey">Idempotency Key:</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="cdIdempotencyKey" placeholder="Unique key for this transaction">
+                    <button onclick="generateCdRandomKey()" style="width: auto; padding: 10px;">🎲 Random</button>
+                </div>
+            </div>
+            <button onclick="creditDebit()">Execute</button>
+            <div id="cdResponse" class="response" style="display: none;"></div>
+        </div>
     </div>
 
     <script>
@@ -581,6 +615,48 @@
                 displayResponse('transferResponse', data, !response.ok, response.status);
             } catch (error) {
                 displayResponse('transferResponse', { error: error.message }, true);
+            }
+        }
+
+        function generateCdRandomKey() {
+            const key = 'cd_' + Math.random().toString(36).substr(2, 9);
+            document.getElementById('cdIdempotencyKey').value = key;
+        }
+
+        async function creditDebit() {
+            if (!apiKey) {
+                alert('Please generate an API key first');
+                return;
+            }
+
+            const account_id = document.getElementById('cdAccountId').value;
+            const amount = parseInt(document.getElementById('cdAmount').value);
+            const transaction_type = document.getElementById('cdType').value;
+            const idempotency_key = document.getElementById('cdIdempotencyKey').value;
+
+            if (!account_id || isNaN(amount) || !idempotency_key) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/accounts/credit-debit`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': apiKey,
+                    },
+                    body: JSON.stringify({
+                        account_id,
+                        amount,
+                        transaction_type,
+                        idempotency_key
+                    }),
+                });
+                const data = await parseResponse(response);
+                displayResponse('cdResponse', data, !response.ok, response.status);
+            } catch (error) {
+                displayResponse('cdResponse', { error: error.message }, true);
             }
         }
     </script>

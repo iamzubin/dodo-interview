@@ -43,6 +43,8 @@ pub struct TransferResponse {
     pub amount: i64,
     pub currency: String,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -53,4 +55,25 @@ pub struct AccountResponse {
     pub business_email: String,
     pub balance: i64,
     pub currency: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreditDebitRequest {
+    pub account_id: String,
+    pub amount: i64,
+    pub transaction_type: String, // "credit" or "debit"
+    pub idempotency_key: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CreditDebitResponse {
+    pub transaction_id: String,
+    pub account_id: String,
+    pub amount: i64,
+    pub currency: String,
+    pub transaction_type: String,
+    pub status: String,
+    pub new_balance: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached: Option<bool>,
 }
