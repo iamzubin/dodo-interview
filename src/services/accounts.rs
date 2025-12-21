@@ -1,4 +1,4 @@
-use crate::models::{TransferRequest, TransferResponse};
+use crate::models::{IdempotencyStatus, TransferRequest, TransferResponse};
 use crate::state::AppState;
 use axum::Json;
 use serde_json::{json, Value};
@@ -32,13 +32,84 @@ pub async fn check_idempotency_cache(
     .await;
 
     if let Ok(Some(row)) = cached {
-        let response_body: serde_json::Value = row.get("response_body");
-        if let Ok(cached_response) = serde_json::from_value::<TransferResponse>(response_body) {
-            return Ok(Some(cached_response));
+        let status: IdempotencyStatus = row.get("status");
+
+        if status == IdempotencyStatus::Success {
+            if let Ok(response_body) = row.try_get::<serde_json::Value, _>("response_body") {
+                if let Ok(cached_response) =
+                    serde_json::from_value::<TransferResponse>(response_body)
+                {
+                    return Ok(Some(cached_response));
+                }
+            }
         }
     }
 
     Ok(None)
+}
+
+pub async fn reserve_idempotency_key(
+    state: &AppState,
+    business_id: Uuid,
+    idempotency_key: &str,
+) -> Result<(), Json<Value>> {
+    // Try to insert as pending.
+    // If it exists:
+    //   if status_code is success (200) -> Return conflict/check cache (handler should have checked cache first)
+    //   if status_code is pending (e.g. 202) -> Return conflict (in progress)
+    //   if status_code is failed (e.g. 500) -> Allow update (retry)
+
+    // We'll use IdempotencyStatus Enum values.
+
+    let result = sqlx::query(
+        "INSERT INTO idempotency_keys (business_id, key, status, created_at) 
+         VALUES ($1, $2, 'pending'::idempotency_status, NOW())
+         ON CONFLICT (business_id, key) DO UPDATE 
+         SET created_at = NOW() 
+         WHERE idempotency_keys.status != 'success'::idempotency_status AND idempotency_keys.status != 'pending'::idempotency_status",
+    )
+    .bind(business_id)
+    .bind(idempotency_key)
+    .execute(&state.pool)
+    .await;
+
+    match result {
+        Ok(res) => {
+            if res.rows_affected() == 0 {
+                // If 0 rows affected, it means it existed and was Success or Pending.
+                // We need to know which one.
+                let existing = sqlx::query(
+                    "SELECT status FROM idempotency_keys WHERE business_id = $1 AND key = $2",
+                )
+                .bind(business_id)
+                .bind(idempotency_key)
+                .fetch_optional(&state.pool)
+                .await;
+
+                match existing {
+                    Ok(Some(row)) => {
+                        let status: IdempotencyStatus = row.get("status");
+                        if status == IdempotencyStatus::Pending {
+                            return Err(Json(json!({ "error": "Operation in progress" })));
+                        } else if status == IdempotencyStatus::Success {
+                            // Should have been caught by cache check, but ok.
+                            return Err(Json(
+                                json!({ "error": "Operation already completed successfully" }),
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+                // If we are here, something weird happened or it was retriable but update didn't run?
+                // Actually, the DO UPDATE WHERE clause prevents update if it's Success or Pending.
+                // So if it was Failed, it would update.
+            }
+            Ok(())
+        }
+        Err(_) => Err(Json(
+            json!({ "error": "Failed to reserve idempotency key" }),
+        )),
+    }
 }
 
 pub async fn fetch_and_validate_accounts(
@@ -138,7 +209,7 @@ pub async fn create_transaction_record(
     from_account_id: Uuid,
     to_account_id: Uuid,
     amount: i64,
-    idempotency_key: &Option<String>,
+    idempotency_key: &str,
 ) -> Result<Uuid, Json<Value>> {
     let transaction_result = sqlx::query(
         "INSERT INTO transactions (business_id, from_account_id, to_account_id, amount, type, status, idempotency_key) 
@@ -168,17 +239,69 @@ pub async fn store_idempotency_key(
     let response_json = serde_json::to_value(response)
         .map_err(|_| Json(json!({ "error": "Failed to serialize response" })))?;
 
+    // Update the pending key to success
     sqlx::query(
-        "INSERT INTO idempotency_keys (business_id, key, response_body, status_code) 
-         VALUES ($1, $2, $3, 200)
-         ON CONFLICT (business_id, key) DO NOTHING",
+        "UPDATE idempotency_keys 
+         SET response_body = $1, status = 'success'::idempotency_status 
+         WHERE business_id = $2 AND key = $3",
+    )
+    .bind(response_json)
+    .bind(business_id)
+    .bind(idempotency_key)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| Json(json!({ "error": "Failed to update idempotency key" })))?;
+
+    Ok(())
+}
+
+pub async fn fail_idempotency_key(
+    state: &AppState,
+    business_id: Uuid,
+    idempotency_key: &str,
+) -> Result<(), Json<Value>> {
+    sqlx::query(
+        "UPDATE idempotency_keys 
+         SET status = 'failed'::idempotency_status 
+         WHERE business_id = $1 AND key = $2",
     )
     .bind(business_id)
     .bind(idempotency_key)
-    .bind(response_json)
-    .execute(&mut **tx)
+    .execute(&state.pool)
     .await
-    .map_err(|_| Json(json!({ "error": "Failed to store idempotency key" })))?;
+    .map_err(|_| Json(json!({ "error": "Failed to set idempotency key failure status" })))?;
+
+    Ok(())
+}
+
+pub async fn create_webhook_event(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    business_id: Uuid,
+    payload: &TransferResponse,
+) -> Result<(), Json<Value>> {
+    let payload_json = serde_json::to_value(payload)
+        .map_err(|_| Json(json!({ "error": "Failed to serialize webhook payload" })))?;
+
+    // Find active endpoints
+    let endpoints =
+        sqlx::query("SELECT id FROM webhook_endpoints WHERE business_id = $1 AND is_active = true")
+            .bind(business_id)
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(|_| Json(json!({ "error": "Failed to fetch webhook endpoints" })))?;
+
+    for endpoint in endpoints {
+        let endpoint_id: Uuid = endpoint.get("id");
+        sqlx::query(
+            "INSERT INTO webhook_events (webhook_endpoint_id, event_type, payload) 
+             VALUES ($1, 'transfer.created', $2)",
+        )
+        .bind(endpoint_id)
+        .bind(&payload_json)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| Json(json!({ "error": "Failed to create webhook event" })))?;
+    }
 
     Ok(())
 }

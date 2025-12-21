@@ -2,8 +2,9 @@ use crate::models::{
     AccountResponse, CreateAccountRequest, GetAccountsQuery, TransferRequest, TransferResponse,
 };
 use crate::services::accounts::{
-    check_idempotency_cache, create_transaction_record, execute_balance_transfer,
-    fetch_and_validate_accounts, store_idempotency_key, validate_transfer_input,
+    check_idempotency_cache, create_transaction_record, create_webhook_event,
+    execute_balance_transfer, fail_idempotency_key, fetch_and_validate_accounts,
+    reserve_idempotency_key, store_idempotency_key, validate_transfer_input,
 };
 use crate::state::AppState;
 use axum::{
@@ -18,8 +19,20 @@ pub async fn create_account(
     Extension(business_id): Extension<Uuid>,
     Json(payload): Json<CreateAccountRequest>,
 ) -> Result<Json<AccountResponse>, Json<Value>> {
+    // Determine business details first to ensure we can return them
+    let row = sqlx::query("SELECT name, email FROM businesses WHERE id = $1")
+        .bind(business_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|_| Json(json!({ "error": "Failed to fetch business details" })))?;
+
+    let (business_name, business_email) = match row {
+        Some(r) => (r.get("name"), r.get("email")),
+        None => return Err(Json(json!({ "error": "Business not found" }))),
+    };
+
     let result = sqlx::query(
-        "INSERT INTO accounts (business_id, currency, balance) VALUES ($1, $2, 0) RETURNING id, balance"
+        "INSERT INTO accounts (business_id, currency, balance) VALUES ($1, $2, 10000) RETURNING id, balance"
     )
     .bind(business_id)
     .bind(&payload.currency)
@@ -35,6 +48,8 @@ pub async fn create_account(
                 business_id: business_id.to_string(),
                 balance,
                 currency: payload.currency,
+                business_name,
+                business_email,
             }))
         }
         Err(_) => Err(Json(json!({ "error": "Failed to create account" }))),
@@ -47,21 +62,24 @@ pub async fn get_accounts(
 ) -> Result<Json<Vec<AccountResponse>>, Json<Value>> {
     // Build dynamic query based on optional filters
     let mut query_str =
-        String::from("SELECT id, business_id, balance, currency FROM accounts WHERE 1=1");
+        String::from("SELECT a.id, a.business_id, a.balance, a.currency, b.name as business_name, b.email as business_email 
+                      FROM accounts a 
+                      JOIN businesses b ON a.business_id = b.id 
+                      WHERE 1=1");
     let mut conditions = Vec::new();
 
     if params.currency.is_some() {
-        conditions.push("currency");
+        conditions.push("a.currency");
     }
     if params.business_id.is_some() {
-        conditions.push("business_id");
+        conditions.push("a.business_id");
     }
 
     for (idx, condition) in conditions.iter().enumerate() {
         query_str.push_str(&format!(" AND {} = ${}", condition, idx + 1));
     }
 
-    query_str.push_str(" ORDER BY created_at");
+    query_str.push_str(" ORDER BY a.created_at");
 
     // Build query with bindings
     let mut query = sqlx::query(&query_str);
@@ -91,6 +109,8 @@ pub async fn get_accounts(
                     business_id: row.get::<Uuid, _>("business_id").to_string(),
                     balance: row.get("balance"),
                     currency: row.get("currency"),
+                    business_name: row.get("business_name"),
+                    business_email: row.get("business_email"),
                 })
                 .collect();
             Ok(Json(accounts))
@@ -108,88 +128,78 @@ pub async fn transfer(
     let (from_account_id, to_account_id) = validate_transfer_input(&payload)?;
 
     // Check for cached idempotent response
-    if let Some(ref idempotency_key) = payload.idempotency_key {
-        if let Some(cached_response) =
-            check_idempotency_cache(&state, business_id, idempotency_key).await?
-        {
-            return Ok(Json(cached_response));
-        }
+    if let Some(cached_response) =
+        check_idempotency_cache(&state, business_id, &payload.idempotency_key).await?
+    {
+        return Ok(Json(cached_response));
     }
 
-    // Start a transaction
-    let mut tx = state
-        .pool
-        .begin()
-        .await
-        .map_err(|_| Json(json!({ "error": "Failed to start transaction" })))?;
+    // Reserve idempotency key
+    reserve_idempotency_key(&state, business_id, &payload.idempotency_key).await?;
 
-    // Fetch and validate accounts, check balance and currency
-    let (currency, _) = match fetch_and_validate_accounts(
-        &mut tx,
-        from_account_id,
-        to_account_id,
-        business_id,
-        payload.amount,
-    )
-    .await
-    {
-        Ok(result) => result,
+    // Helper to handle errors by updating the idempotency key status
+    let process_transfer = async {
+        // Start a transaction
+        let mut tx = state
+            .pool
+            .begin()
+            .await
+            .map_err(|_| Json(json!({ "error": "Failed to start transaction" })))?;
+
+        // Fetch and validate accounts
+        let (currency, _) = fetch_and_validate_accounts(
+            &mut tx,
+            from_account_id,
+            to_account_id,
+            business_id,
+            payload.amount,
+        )
+        .await?;
+
+        // Execute the balance transfer
+        execute_balance_transfer(&mut tx, from_account_id, to_account_id, payload.amount).await?;
+
+        // Create transaction record
+        let transaction_id = create_transaction_record(
+            &mut tx,
+            business_id,
+            from_account_id,
+            to_account_id,
+            payload.amount,
+            &payload.idempotency_key,
+        )
+        .await?;
+
+        // Prepare response
+        let response = TransferResponse {
+            transaction_id: transaction_id.to_string(),
+            from_account_id: payload.from_account_id.clone(),
+            to_account_id: payload.to_account_id.clone(),
+            amount: payload.amount,
+            currency,
+            status: "success".to_string(),
+        };
+
+        // Create webhook event
+        create_webhook_event(&mut tx, business_id, &response).await?;
+
+        // Store idempotency key (mark as success)
+        store_idempotency_key(&mut tx, business_id, &payload.idempotency_key, &response).await?;
+
+        // Commit transaction
+        tx.commit()
+            .await
+            .map_err(|_| Json(json!({ "error": "Failed to commit transaction" })))?;
+
+        Ok(Json(response))
+    };
+
+    match process_transfer.await {
+        Ok(response) => Ok(response),
         Err(err) => {
-            let _ = tx.rollback().await;
-            return Err(err);
-        }
-    };
-
-    // Execute the balance transfer
-    if let Err(err) =
-        execute_balance_transfer(&mut tx, from_account_id, to_account_id, payload.amount).await
-    {
-        let _ = tx.rollback().await;
-        return Err(err);
-    }
-
-    // Create transaction record
-    let transaction_id = match create_transaction_record(
-        &mut tx,
-        business_id,
-        from_account_id,
-        to_account_id,
-        payload.amount,
-        &payload.idempotency_key,
-    )
-    .await
-    {
-        Ok(id) => id,
-        Err(err) => {
-            let _ = tx.rollback().await;
-            return Err(err);
-        }
-    };
-
-    // Prepare response
-    let response = TransferResponse {
-        transaction_id: transaction_id.to_string(),
-        from_account_id: payload.from_account_id.clone(),
-        to_account_id: payload.to_account_id.clone(),
-        amount: payload.amount,
-        currency,
-        status: "success".to_string(),
-    };
-
-    // Store idempotency key if provided
-    if let Some(ref idempotency_key) = payload.idempotency_key {
-        if let Err(err) =
-            store_idempotency_key(&mut tx, business_id, idempotency_key, &response).await
-        {
-            let _ = tx.rollback().await;
-            return Err(err);
+            // Mark idempotency key as failed so it can be retried
+            let _ = fail_idempotency_key(&state, business_id, &payload.idempotency_key).await;
+            Err(err)
         }
     }
-
-    // Commit transaction
-    tx.commit()
-        .await
-        .map_err(|_| Json(json!({ "error": "Failed to commit transaction" })))?;
-
-    Ok(Json(response))
 }

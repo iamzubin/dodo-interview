@@ -1,6 +1,10 @@
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Define Enums
+CREATE TYPE idempotency_status AS ENUM ('pending', 'success', 'failed');
+CREATE TYPE webhook_event_status AS ENUM ('pending', 'delivered', 'failed');
+
 CREATE TABLE IF NOT EXISTS businesses (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name            TEXT,
@@ -57,7 +61,7 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     business_id     UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
     key             TEXT NOT NULL,
     response_body   JSONB,
-    status_code     INT,
+    status          idempotency_status NOT NULL,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     PRIMARY KEY (business_id, key)
@@ -81,7 +85,7 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     webhook_endpoint_id UUID NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
     event_type          TEXT NOT NULL,
     payload             JSONB NOT NULL,
-    status              TEXT NOT NULL DEFAULT 'pending', -- pending | delivered | failed
+    status              webhook_event_status NOT NULL DEFAULT 'pending',
     attempts            INT DEFAULT 0,
     last_attempt_at     TIMESTAMP,
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP

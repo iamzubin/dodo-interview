@@ -35,6 +35,16 @@ services:
       postgres:
         condition: service_healthy
 
+  webhook_consumer:
+    image: python:alpine
+    container_name: dodo_webhook_consumer
+    volumes:
+      - ./scripts/consumer.py:/app/consumer.py
+    working_dir: /app
+    command: python -u consumer.py
+    ports:
+      - "8000:8000"
+
 volumes:
   postgres_data:
   cargo_cache:

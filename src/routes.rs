@@ -23,6 +23,21 @@ pub fn create_router(state: AppState) -> Router<AppState> {
             auth_middleware,
         ));
 
+    // Protected webhooks routes
+    let protected_webhooks_routes = Router::new()
+        .route(
+            "/register",
+            post(crate::handlers::webhooks::register_webhook_handler),
+        )
+        .route(
+            "/list",
+            get(crate::handlers::webhooks::list_webhooks_handler),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
+
     // Public accounts routes
     let public_accounts_routes = Router::new().route("/", get(accounts::get_accounts));
 
@@ -33,6 +48,7 @@ pub fn create_router(state: AppState) -> Router<AppState> {
             public_accounts_routes.merge(protected_accounts_routes),
         )
         .nest("/auth", auth_routes)
+        .nest("/webhooks", protected_webhooks_routes)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

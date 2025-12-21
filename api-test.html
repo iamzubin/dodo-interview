@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Tester - Dodo Interview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .api-section {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .api-section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        input,
+        textarea {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .response {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+
+        .response h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .response pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .status-success {
+            color: #10b981;
+            font-weight: 600;
+        }
+
+        .status-error {
+            color: #ef4444;
+            font-weight: 600;
+        }
+
+        .api-key-storage {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 25px;
+        }
+
+        .api-key-storage h3 {
+            color: #856404;
+            margin-bottom: 10px;
+        }
+
+        .api-key-display {
+            font-family: monospace;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            word-break: break-all;
+            margin-top: 10px;
+        }
+
+        .method-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+
+        .method-get {
+            background: #10b981;
+            color: white;
+        }
+
+        .method-post {
+            background: #3b82f6;
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🚀 API Tester</h1>
+
+        <div class="api-key-storage">
+            <h3>🔑 API Key Storage</h3>
+            <p>Your API key will be stored here after generating it. It will be automatically used for authenticated
+                requests.</p>
+            <div id="apiKeyDisplay" class="api-key-display" style="display: none;"></div>
+            <button onclick="clearApiKey()" style="margin-top: 10px; background: #ef4444;">Clear API Key</button>
+        </div>
+
+        <!-- Health Check -->
+        <div class="api-section">
+            <h2>
+                <span class="method-badge method-get">GET</span>
+                Health Check
+            </h2>
+            <p style="margin-bottom: 15px; color: #666;">Check if the API server is healthy and database is connected.
+            </p>
+            <button onclick="healthCheck()">Check Health</button>
+            <div id="healthResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <!-- Signup -->
+        <div class="api-section">
+            <h2>
+                <span class="method-badge method-post">POST</span>
+                Sign Up
+            </h2>
+            <p style="margin-bottom: 15px; color: #666;">Create a new business account.</p>
+            <div class="form-group">
+                <label for="signupEmail">Email:</label>
+                <input type="email" id="signupEmail" placeholder="user@example.com">
+            </div>
+            <div class="form-group">
+                <label for="signupPassword">Password:</label>
+                <input type="password" id="signupPassword" placeholder="Your password">
+            </div>
+            <div class="form-group">
+                <label for="signupName">Name:</label>
+                <input type="text" id="signupName" placeholder="Business name">
+            </div>
+            <button onclick="signup()">Sign Up</button>
+            <div id="signupResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <!-- Generate API Key -->
+        <div class="api-section">
+            <h2>
+                <span class="method-badge method-post">POST</span>
+                Generate API Key
+            </h2>
+            <p style="margin-bottom: 15px; color: #666;">Generate an API key using your email and password.</p>
+            <div class="form-group">
+                <label for="apiKeyEmail">Email:</label>
+                <input type="email" id="apiKeyEmail" placeholder="user@example.com">
+            </div>
+            <div class="form-group">
+                <label for="apiKeyPassword">Password:</label>
+                <input type="password" id="apiKeyPassword" placeholder="Your password">
+            </div>
+            <button onclick="generateApiKey()">Generate API Key</button>
+            <div id="apiKeyResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <!-- Create Account -->
+        <div class="api-section">
+            <h2>
+                <span class="method-badge method-post">POST</span>
+                Create Account
+            </h2>
+            <p style="margin-bottom: 15px; color: #666;">Create a new account (requires API key authentication).</p>
+            <div class="form-group">
+                <label for="accountCurrency">Currency:</label>
+                <input type="text" id="accountCurrency" placeholder="USD" value="USD">
+            </div>
+            <button onclick="createAccount()">Create Account</button>
+            <div id="accountResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <!-- Get Accounts -->
+        <div class="api-section">
+            <h2>
+                <span class="method-badge method-get">GET</span>
+                Get Accounts
+            </h2>
+            <p style="margin-bottom: 15px; color: #666;">List all accounts associated with your business.</p>
+            <button onclick="getAccounts()">Fetch Accounts</button>
+            <div id="getAccountsResponse" class="response" style="display: none;"></div>
+            <!-- Helper to easily copy IDs -->
+            <div id="accountListDisplay" style="margin-top: 15px; display: none;"></div>
+        </div>
+
+        <!-- Webhook Management -->
+        <div class="api-section">
+            <h2>
+                <span class="method-badge method-post">POST</span>
+                Webhooks
+            </h2>
+            <p style="margin-bottom: 15px; color: #666;">Register webhooks to receive transfer notifications.</p>
+
+            <div class="form-group">
+                <label for="webhookUrl">Webhook URL:</label>
+                <input type="text" id="webhookUrl" placeholder="http://webhook_consumer:8000/"
+                    value="http://webhook_consumer:8000/">
+            </div>
+            <div class="form-group">
+                <label for="webhookSecret">Secret:</label>
+                <input type="text" id="webhookSecret" placeholder="my-secret-key" value="my-secret-key">
+            </div>
+
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <button onclick="registerWebhook()">Register Webhook</button>
+                <button onclick="listWebhooks()" style="background: #10b981;">List Webhooks</button>
+            </div>
+
+            <p style="font-size: 13px; color: #666; margin-top: 10px;">
+                ℹ️ Check logs: <code>docker-compose logs -f webhook_consumer</code>
+            </p>
+
+            <div id="webhookResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <!-- Transfer -->
+        <div class="api-section">
+            <h2>
+                <span class="method-badge method-post">POST</span>
+                Transfer Funds
+            </h2>
+            <p style="margin-bottom: 15px; color: #666;">Transfer funds between accounts. Requires Idempotency Key.</p>
+            <div class="form-group">
+                <label for="transferFrom">From Account ID:</label>
+                <input type="text" id="transferFrom" placeholder="UUID">
+            </div>
+            <div class="form-group">
+                <label for="transferTo">To Account ID:</label>
+                <input type="text" id="transferTo" placeholder="UUID">
+            </div>
+            <div class="form-group">
+                <label for="transferAmount">Amount:</label>
+                <input type="number" id="transferAmount" placeholder="100">
+            </div>
+            <div class="form-group">
+                <label for="transferIdempotencyKey">Idempotency Key:</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="transferIdempotencyKey" placeholder="Unique key for this transaction">
+                    <button onclick="generateRandomKey()" style="width: auto; padding: 10px;">🎲 Random</button>
+                </div>
+            </div>
+            <button onclick="transferFunds()">Execute Transfer</button>
+            <div id="transferResponse" class="response" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:3000';
+
+        // Load API key from localStorage
+        let apiKey = localStorage.getItem('apiKey');
+        if (apiKey) {
+            document.getElementById('apiKeyDisplay').textContent = apiKey;
+            document.getElementById('apiKeyDisplay').style.display = 'block';
+        }
+
+        function clearApiKey() {
+            apiKey = null;
+            localStorage.removeItem('apiKey');
+            document.getElementById('apiKeyDisplay').style.display = 'none';
+            alert('API key cleared!');
+        }
+
+        async function parseResponse(response) {
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.indexOf("application/json") !== -1) {
+                return await response.json();
+            } else {
+                const text = await response.text();
+                return text ? { text } : null; // Handle empty body
+            }
+        }
+
+        function displayResponse(elementId, data, isError = false, status = null) {
+            const responseDiv = document.getElementById(elementId);
+            responseDiv.style.display = 'block';
+
+            const statusClass = isError ? 'status-error' : 'status-success';
+            const statusText = isError ? 'Error' : 'Success';
+            const statusInfo = status ? ` (${status})` : '';
+
+            responseDiv.innerHTML = `
+                <h3 class="${statusClass}">Status: ${statusText}${statusInfo}</h3>
+                <pre>${JSON.stringify(data, null, 2)}</pre>
+            `;
+        }
+
+        async function healthCheck() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/`);
+                const data = await parseResponse(response);
+                displayResponse('healthResponse', data, !response.ok, response.status);
+            } catch (error) {
+                displayResponse('healthResponse', { error: error.message }, true);
+            }
+        }
+
+        async function signup() {
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+            const name = document.getElementById('signupName').value;
+
+            if (!email || !password || !name) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/auth/signup`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password, name }),
+                });
+                const data = await parseResponse(response);
+                displayResponse('signupResponse', data, !response.ok, response.status);
+            } catch (error) {
+                displayResponse('signupResponse', { error: error.message }, true);
+            }
+        }
+
+        async function generateApiKey() {
+            const email = document.getElementById('apiKeyEmail').value;
+            const password = document.getElementById('apiKeyPassword').value;
+
+            if (!email || !password) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/auth/generate-api-key`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password }),
+                });
+                const data = await parseResponse(response);
+
+                if (response.ok && data && data.api_key) {
+                    apiKey = data.api_key;
+                    localStorage.setItem('apiKey', apiKey);
+                    document.getElementById('apiKeyDisplay').textContent = apiKey;
+                    document.getElementById('apiKeyDisplay').style.display = 'block';
+                }
+
+                displayResponse('apiKeyResponse', data, !response.ok, response.status);
+            } catch (error) {
+                displayResponse('apiKeyResponse', { error: error.message }, true);
+            }
+        }
+
+        async function createAccount() {
+            if (!apiKey) {
+                alert('Please generate an API key first');
+                return;
+            }
+
+            const currency = document.getElementById('accountCurrency').value;
+
+            if (!currency) {
+                alert('Please enter a currency');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/accounts/create`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': apiKey,
+                    },
+                    body: JSON.stringify({ currency }),
+                });
+                const data = await parseResponse(response);
+                displayResponse('accountResponse', data, !response.ok, response.status);
+            } catch (error) {
+                displayResponse('accountResponse', { error: error.message }, true);
+            }
+        }
+
+        async function getAccounts() {
+            if (!apiKey) {
+                alert('Please generate an API key first');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/accounts`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': apiKey,
+                    },
+                });
+                const data = await parseResponse(response);
+                displayResponse('getAccountsResponse', data, !response.ok, response.status);
+
+                const listDiv = document.getElementById('accountListDisplay');
+                if (response.ok && Array.isArray(data)) {
+                    listDiv.style.display = 'block';
+                    listDiv.innerHTML = data.map(acc => `
+                        <div style="background: #f8f9fa; padding: 10px; margin-bottom: 5px; border-radius: 4px; border: 1px solid #e0e0e0;">
+                            <strong>${acc.currency}</strong> - Balance: ${acc.balance} <br>
+                            <code style="display:block; margin-top:5px; cursor:pointer;" onclick="navigator.clipboard.writeText('${acc.id}'); alert('Copied ID: ${acc.id}')">
+                                ${acc.id} (Click to Copy)
+                            </code>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                displayResponse('getAccountsResponse', { error: error.message }, true);
+            }
+        }
+
+        async function registerWebhook() {
+            if (!apiKey) {
+                alert('Please generate an API key first');
+                return;
+            }
+
+            const url = document.getElementById('webhookUrl').value;
+            const secret = document.getElementById('webhookSecret').value;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/webhooks/register`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': apiKey,
+                    },
+                    body: JSON.stringify({ url, secret }),
+                });
+                const data = await parseResponse(response);
+                displayResponse('webhookResponse', data, !response.ok, response.status);
+            } catch (error) {
+                displayResponse('webhookResponse', { error: error.message }, true);
+            }
+        }
+
+        async function listWebhooks() {
+            if (!apiKey) {
+                alert('Please generate an API key first');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/webhooks/list`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': apiKey,
+                    },
+                });
+                const data = await parseResponse(response);
+                displayResponse('webhookResponse', data, !response.ok, response.status);
+            } catch (error) {
+                displayResponse('webhookResponse', { error: error.message }, true);
+            }
+        }
+
+        function generateRandomKey() {
+            const key = 'req_' + Math.random().toString(36).substr(2, 9);
+            document.getElementById('transferIdempotencyKey').value = key;
+        }
+
+        async function transferFunds() {
+            if (!apiKey) {
+                alert('Please generate an API key first');
+                return;
+            }
+
+            const from_account_id = document.getElementById('transferFrom').value;
+            const to_account_id = document.getElementById('transferTo').value;
+            const amount = parseInt(document.getElementById('transferAmount').value);
+            const idempotency_key = document.getElementById('transferIdempotencyKey').value;
+
+            if (!from_account_id || !to_account_id || isNaN(amount) || !idempotency_key) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/accounts/transfer`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': apiKey,
+                    },
+                    body: JSON.stringify({
+                        from_account_id,
+                        to_account_id,
+                        amount,
+                        idempotency_key
+                    }),
+                });
+                const data = await parseResponse(response);
+                displayResponse('transferResponse', data, !response.ok, response.status);
+            } catch (error) {
+                displayResponse('transferResponse', { error: error.message }, true);
+            }
+        }
+    </script>
+</body>
+
+</html>
