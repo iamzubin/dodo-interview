@@ -247,6 +247,24 @@ flowchart LR
 
 ---
 
+## Rate Limiting
+
+### Strategy
+
+The service implements per-API-key rate limiting using the **Token Bucket** algorithm (via `tower-governor`).
+
+**Configuration**:
+- **Quota**: 10 requests per second
+- **Burst**: 20 requests
+- **Key**: Extracted from the `Authorization` header
+- **Backends**: In-memory (per instance)
+
+**Behavior**:
+- Requests exceeding the limit are rejected with `429 Too Many Requests`.
+- Rate limiting is applied **after** authentication but **before** business logic.
+
+---
+
 ## Operational Considerations
 
 ### Health Check
@@ -282,8 +300,6 @@ This starts:
 
 ## Future Improvements
 
-- [ ] **Rate Limiting**: Per-API-key throttling (implementation started with `tower-governor`, pending integration)
 - [ ] **OpenTelemetry**: Structured logging, distributed tracing, metrics
 - [ ] **Webhook Signing**: HMAC-SHA256 signature instead of shared secret header
 - [ ] **Pagination**: For list endpoints (`/accounts`, `/webhooks/list`)
-- [ ] **Account Statements**: Transaction history endpoint

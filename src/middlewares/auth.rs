@@ -7,6 +7,22 @@ use axum::{
 use hex;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
+use tower_governor::{errors::GovernorError, key_extractor::KeyExtractor};
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ApiKeyExtractor;
+
+impl KeyExtractor for ApiKeyExtractor {
+    type Key = String;
+
+    fn extract<B>(&self, req: &Request<B>) -> Result<Self::Key, GovernorError> {
+        req.headers()
+            .get("Authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(|s| s.to_string())
+            .ok_or(GovernorError::UnableToExtractKey)
+    }
+}
 
 pub async fn auth_middleware(
     State(state): State<AppState>,
